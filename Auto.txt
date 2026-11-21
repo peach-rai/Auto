@@ -1,0 +1,230 @@
+const int ENA = 8;
+const int IN1 = 9;
+const int IN2 = 10;
+
+const int ENB = 11; 
+const int IN3 = 12; 
+const int IN4 = 13; 
+
+const int rightTrig = 4;
+const int rightEcho = 5;
+
+const int leftTrig = 6;
+const int leftEcho = 7;
+
+const int midTrig = 2;
+const int midEcho = 3;
+
+int speedLeft  = 160; 
+int speedRight = 150; 
+
+int turnSpeedLeft  = 160; 
+int turnSpeedRight = 150; 
+
+float Kp_increase = 4.0;  
+float Kp_decrease = 3.0;  
+int target_clearance = 8; 
+int DEADBAND = 2;         
+
+float filterLeft  = 8.0;
+float filterRight = 8.0;
+const float EMA_ALPHA = 0.6; 
+
+const int PAUSE_BEFORE_TURN = 200; 
+const int FORWARD_BEFORE_TURN = 150;
+const int TURN_90_TIME      = 275;  
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  pinMode(rightTrig, OUTPUT); pinMode(rightEcho, INPUT);
+  pinMode(leftTrig, OUTPUT);  pinMode(leftEcho, INPUT);
+  pinMode(midTrig, OUTPUT);   pinMode(midEcho, INPUT);
+
+  digitalWrite(ENA, HIGH); 
+
+  stopMotors();
+  delay(1000);
+}
+
+void loop() {
+  long rawRight = readDistance(rightTrig, rightEcho);
+  delay(20); 
+  long rawLeft  = readDistance(leftTrig, leftEcho);
+  delay(20); 
+  long rawMid   = readDistance(midTrig, midEcho);
+  delay(20); 
+
+  filterLeft  = (EMA_ALPHA * rawLeft)  + ((1.0 - EMA_ALPHA) * filterLeft);
+  filterRight = (EMA_ALPHA * rawRight) + ((1.0 - EMA_ALPHA) * filterRight);
+
+  long leftDist  = (long)filterLeft;
+  long rightDist = (long)filterRight;
+  long midDist   = rawMid; 
+
+  Serial.print("L: "); Serial.print(leftDist);
+  Serial.print(" cm | M: "); Serial.print(midDist);
+  Serial.print(" cm | R: "); Serial.print(rightDist);
+  Serial.println(" cm");
+
+  if (midDist <= 12) {
+    if (rightDist > leftDist) {
+      turnRightSmooth();
+    } else {
+      turnLeftSmooth();
+    }
+  }
+  else if (rightDist >= 28 && midDist >= 20) {
+    turnRightSmooth();
+    moveForwardStep(350); 
+  }
+  else {
+    moveForwardStep(250);
+  }
+}
+
+long readDistance(int trigPin, int echoPin) {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  long duration = pulseIn(echoPin, HIGH, 25000); 
+  
+  if (duration == 0) {
+    return 999; 
+  }
+  return duration * 0.034 / 2;
+}
+
+void moveForwardRaw(int duration) {
+  analogWrite(IN1, speedRight);
+  digitalWrite(IN2, LOW);
+  
+  analogWrite(ENB, speedLeft);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+
+  delay(duration);
+  stopMotors();
+}
+
+void moveForwardStep(int duration) {
+  long leftCheck  = readDistance(leftTrig, leftEcho);
+  delay(15);
+  long rightCheck = readDistance(rightTrig, rightEcho);
+
+  if (leftCheck < 4 && leftCheck > 0) {
+    stopMotors();
+    delay(100);
+    
+    analogWrite(IN1, speedRight * 0.5);
+    digitalWrite(IN2, LOW);
+    
+    analogWrite(ENB, speedLeft);
+    digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW); 
+    
+    delay(120);
+    stopMotors();
+  } 
+  else if (rightCheck < 4 && rightCheck > 0) {
+    stopMotors();
+    delay(100);
+    
+    analogWrite(IN1, speedRight);
+    digitalWrite(IN2, LOW);
+    
+    analogWrite(ENB, speedLeft * 0.5);
+    digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);  
+    
+    delay(120);
+    stopMotors();
+  }
+
+  int adjLeft  = speedLeft;
+  int adjRight = speedRight;
+
+  if (leftCheck < target_clearance && leftCheck > 0) {
+    int error = target_clearance - leftCheck;
+    if (error > DEADBAND) {
+      int effectiveError = error - DEADBAND;
+      adjLeft  += (effectiveError * Kp_increase); 
+      adjRight -= (effectiveError * Kp_decrease);
+    }
+  } 
+  else if (rightCheck < target_clearance && rightCheck > 0) {
+    int error = target_clearance - rightCheck;
+    if (error > DEADBAND) {
+      int effectiveError = error - DEADBAND;
+      adjLeft  -= (effectiveError * Kp_decrease); 
+      adjRight += (effectiveError * Kp_increase);
+    }
+  }
+
+  adjLeft  = constrain(adjLeft, 0, 255);
+  adjRight = constrain(adjRight, 0, 255);
+
+  analogWrite(IN1, adjRight);
+  digitalWrite(IN2, LOW);
+  
+  analogWrite(ENB, adjLeft);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+
+  delay(duration);
+  stopMotors();
+  delay(50);
+}
+
+void turnRightSmooth() {
+  stopMotors();
+  
+  moveForwardRaw(FORWARD_BEFORE_TURN);
+  delay(PAUSE_BEFORE_TURN);
+  
+  digitalWrite(IN1, LOW); 
+  analogWrite(IN2, turnSpeedRight); 
+  
+  analogWrite(ENB, turnSpeedLeft);
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW); 
+  
+  delay(TURN_90_TIME);
+  stopMotors();
+  delay(80);
+}
+
+void turnLeftSmooth() {
+  stopMotors();
+  
+  moveForwardRaw(FORWARD_BEFORE_TURN);
+  delay(PAUSE_BEFORE_TURN);
+  
+  analogWrite(IN1, turnSpeedRight); 
+  digitalWrite(IN2, LOW);
+  
+  analogWrite(ENB, turnSpeedLeft);
+  digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH); 
+  
+  delay(TURN_90_TIME);
+  stopMotors();
+  delay(80);
+}
+
+void stopMotors() {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  
+  analogWrite(ENB, 0);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+}
+
